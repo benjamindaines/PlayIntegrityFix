@@ -1,7 +1,6 @@
-id=playintegrityfix
+id=playintegrityfix-benos
 name=Play Integrity Fix [INJECT]
 version=v4.6-inject-s
 versionCode=46
 author=chiteroman, KOWX712
 description=Universal modular fix for Play Integrity on devices running Android 8-17
-updateJson=https://raw.githubusercontent.com/KOWX712/PlayIntegrityFix/inject_s/update.json

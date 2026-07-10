@@ -39,3 +39,7 @@ resetprop_if_diff vendor.boot.vbmeta.device_state locked
 
 # Other
 resetprop_if_diff sys.oem_unlock_allowed 0
+
+sh $MODDIR/autopif_ota.sh || true
+sh $MODDIR/autopif.sh
+

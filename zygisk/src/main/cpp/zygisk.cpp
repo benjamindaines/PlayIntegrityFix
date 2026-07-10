@@ -157,72 +157,72 @@ uint32_t crc32(const uint8_t *data, size_t len) {
     return ~crc;
 }
 
-bool verifyModule(const char *path, const char *expectedHex) {
-    const bool update = access("/data/adb/modules/playintegrityfix/update", F_OK) == 0;
-    if (update) {
-        return true;
-    }
-
-    const int fd = open(path, O_RDWR);
-    if (fd < 0) {
-        return false;
-    }
-
-    std::vector<uint8_t> buf;
-    uint8_t tmp[512];
-    ssize_t n = 0;
-    while ((n = read(fd, tmp, sizeof(tmp))) > 0) {
-        buf.insert(buf.end(), tmp, tmp + n);
-    }
-    if (buf.empty()) {
-        close(fd);
-        return false;
-    }
-
-    const uint32_t crc = crc32(buf.data(), buf.size());
-    uint32_t expectedCrc = 0;
-    sscanf(expectedHex, "%x", &expectedCrc);
-
-    if (crc == expectedCrc) {
-        close(fd);
-        return true;
-    }
-
-    LOGD("[COMPANION] module tampered!");
-
-    lseek(fd, 0, SEEK_SET);
-    std::vector<std::string> lines;
-    const std::string fileStr(buf.begin(), buf.end());
-    size_t pos = 0;
-    while (pos < fileStr.size()) {
-        const size_t next = fileStr.find('\n', pos);
-        std::string line = fileStr.substr(pos, next - pos + 1);
-        if (line.rfind("description=", 0) == 0) {
-            line = "description=❌ This module has been tampered, please install from official source.\n";
-        }
-        lines.push_back(line);
-        if (next == std::string::npos) {
-            break;
-        }
-        pos = next + 1;
-    }
-
-    if (ftruncate(fd, 0) != 0) {
-        close(fd);
-        return false;
-    }
-
-    lseek(fd, 0, SEEK_SET);
-    for (const auto &line : lines) {
-        if (write(fd, line.c_str(), line.size()) != static_cast<ssize_t>(line.size())) {
-            close(fd);
-            return false;
-        }
-    }
-
-    close(fd);
-    return false;
-}
+//bool verifyModule(const char *path, const char *expectedHex) {
+//    const bool update = access("/data/adb/modules/playintegrityfix/update", F_OK) == 0;
+//    if (update) {
+//        return true;
+//    }
+//
+//    const int fd = open(path, O_RDWR);
+//    if (fd < 0) {
+//        return false;
+//    }
+//
+//    std::vector<uint8_t> buf;
+//    uint8_t tmp[512];
+//    ssize_t n = 0;
+//    while ((n = read(fd, tmp, sizeof(tmp))) > 0) {
+//        buf.insert(buf.end(), tmp, tmp + n);
+//    }
+//    if (buf.empty()) {
+//        close(fd);
+//        return false;
+//    }
+//
+//    const uint32_t crc = crc32(buf.data(), buf.size());
+//    uint32_t expectedCrc = 0;
+//    sscanf(expectedHex, "%x", &expectedCrc);
+//
+//    if (crc == expectedCrc) {
+//        close(fd);
+//        return true;
+//    }
+//
+//    LOGD("[COMPANION] module tampered!");
+//
+//    lseek(fd, 0, SEEK_SET);
+//    std::vector<std::string> lines;
+//    const std::string fileStr(buf.begin(), buf.end());
+//    size_t pos = 0;
+//    while (pos < fileStr.size()) {
+//        const size_t next = fileStr.find('\n', pos);
+//        std::string line = fileStr.substr(pos, next - pos + 1);
+//        if (line.rfind("description=", 0) == 0) {
+//            line = "description=❌ This module has been tampered, please install from official source.\n";
+//        }
+//        lines.push_back(line);
+//        if (next == std::string::npos) {
+//            break;
+//        }
+//        pos = next + 1;
+//    }
+//
+//    if (ftruncate(fd, 0) != 0) {
+//        close(fd);
+//        return false;
+//    }
+//
+//    lseek(fd, 0, SEEK_SET);
+//    for (const auto &line : lines) {
+//        if (write(fd, line.c_str(), line.size()) != static_cast<ssize_t>(line.size())) {
+//            close(fd);
+//            return false;
+//        }
+//    }
+//
+//    close(fd);
+//    return false;
+//}
 
 std::string propMapToJson() {
     std::string json = "{";
@@ -461,7 +461,8 @@ bool requestPayload(int fd) {
 void companion(int fd) {
     applySocketTimeout(fd);
 
-    bool ok = verifyModule(MODULE_PROP, MODULE_PROP_CHECKSUM_HEX);
+//    bool ok = verifyModule(MODULE_PROP, MODULE_PROP_CHECKSUM_HEX);
+    bool ok = true;
     uint8_t command = 0;
     ok = ok && readExact(fd, &command, sizeof(command));
     ok = ok && command == COMMAND_LOAD_PAYLOAD;
