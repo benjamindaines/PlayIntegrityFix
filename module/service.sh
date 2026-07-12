@@ -1,4 +1,5 @@
 MODPATH="${0%/*}"
+MODDIR="$MODPATH"
 . "$MODPATH"/common_func.sh
 
 # Conditional sensitive properties
@@ -40,5 +41,4 @@ resetprop_if_diff vendor.boot.vbmeta.device_state locked
 # Other
 resetprop_if_diff sys.oem_unlock_allowed 0
 
-sh $MODDIR/autopif.sh
-
+sh "$MODDIR/autopif.sh"
