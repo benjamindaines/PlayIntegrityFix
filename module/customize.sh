@@ -60,19 +60,19 @@ if [ -d "/data/adb/modules/MagiskHidePropsConf" ]; then
 fi
 
 # Preserve previous setting
-if [ -f "/data/adb/modules/playintegrityfix/pif.prop" ]; then
+if [ -f "/data/adb/modules/playintegrityfix-benos/pif.prop" ]; then
     spoofConfig="spoofBuild spoofProps spoofProvider spoofSignature spoofVendingBuild spoofVendingSdk"
     for config in $spoofConfig; do
-        grep -q "$config" "/data/adb/modules/playintegrityfix/pif.prop" || continue
-        if grep -q "$config=true" "/data/adb/modules/playintegrityfix/pif.prop"; then
+        grep -q "$config" "/data/adb/modules/playintegrityfix-benos/pif.prop" || continue
+        if grep -q "$config=true" "/data/adb/modules/playintegrityfix-benos/pif.prop"; then
             sed -i "s/$config=.*/$config=true/" "$MODPATH/pif.prop"
         else
             sed -i "s/$config=.*/$config=false/" "$MODPATH/pif.prop"
         fi
     done
 fi
-if [ -f "/data/adb/modules/playintegrityfix/system.prop" ]; then
-    cp -af /data/adb/modules/playintegrityfix/system.prop "$MODPATH/system.prop"
+if [ -f "/data/adb/modules/playintegrityfix-benos/system.prop" ]; then
+    cp -af /data/adb/modules/playintegrityfix-benos/system.prop "$MODPATH/system.prop"
 fi
 
 # Check custom fingerprint

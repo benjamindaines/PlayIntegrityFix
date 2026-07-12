@@ -1,14 +1,14 @@
-MODDIR="/data/adb/modules/playintegrityfix"
+MODDIR="/data/adb/modules/playintegrityfix-benos"
 
 if [ -z "$MMRL" ] && [ ! -z "$MAGISKTMP" ]; then
     pm path io.github.a13e300.ksuwebui > /dev/null 2>&1 && {
         echo "- Launching WebUI in KSUWebUIStandalone..."
-        am start -n "io.github.a13e300.ksuwebui/.WebUIActivity" -e id "playintegrityfix"
+        am start -n "io.github.a13e300.ksuwebui/.WebUIActivity" -e id "playintegrityfix-benos"
         exit 0
     }
     pm path com.dergoogler.mmrl.wx > /dev/null 2>&1 && {
         echo "- Launching WebUI in WebUI X..."
-        am start -n "com.dergoogler.mmrl.wx/.ui.activity.webui.WebUIActivity" -e MOD_ID "playintegrityfix"
+        am start -n "com.dergoogler.mmrl.wx/.ui.activity.webui.WebUIActivity" -e MOD_ID "playintegrityfix-benos"
         exit 0
     }
 fi
