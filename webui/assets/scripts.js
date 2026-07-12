@@ -10,9 +10,9 @@ let model = null, product = null;
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 24;
 
-const repository = 'KOWX712/PlayIntegrityFix';
+const repository = 'benjamindaines/PlayIntegrityFix';
 const branch = 'inject_s';
-const moddir = '/data/adb/modules/playintegrityfix';
+const moddir = '/data/adb/modules/playintegrityfix-benos';
 
 const spoofConfig = [
     { config: 'spoofBuild', label: 'Spoof Build' },
@@ -361,14 +361,6 @@ function runAction() {
     });
 }
 
-function updateAutopif() {
-    muteToggle(true);
-    const scriptOutput = spawn("sh", [`${moddir}/autopif_ota.sh`]);
-    scriptOutput.stdout.on('data', (data) => appendToOutput(data));
-    scriptOutput.stderr.on('data', (data) => appendToOutput(data, true));
-    scriptOutput.on('exit', () => muteToggle(false));
-}
-
 function muteToggle(mute, scriptOnly = null) {
     shellRunning = mute;
     document.querySelectorAll('md-switch, md-assist-chip, md-filter-chip, md-ripple').forEach(item => {
@@ -484,8 +476,6 @@ echo "- new pif.prop saved to /data/adb/pif.prop"
 
 if [ -e "/data/adb/tricky_store/pif_auto_security_patch" ]; then
 	sh "${moddir}/security_patch.sh"
-else
-	rm -f "${moddir}/system.prop"
 fi
             `).then((result) => {
                 if (result.errno === 0) {
@@ -664,7 +654,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadAutoSecurityPatchConfig();
     loadScriptOnlyConfig();
     setupDeviceList();
-    updateAutopif();
     checkSeLinuxStatus();
     checkPropDate();
     checkRomSignature();

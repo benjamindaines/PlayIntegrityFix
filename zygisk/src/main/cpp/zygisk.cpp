@@ -19,9 +19,9 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "PIF", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "PIF", __VA_ARGS__)
 
-#define DEX_PATH "/data/adb/modules/playintegrityfix/classes.dex"
-#define MODULE_PROP "/data/adb/modules/playintegrityfix/module.prop"
-#define DEFAULT_PIF "/data/adb/modules/playintegrityfix/pif.prop"
+#define DEX_PATH "/data/adb/modules/playintegrityfix-benos/classes.dex"
+#define MODULE_PROP "/data/adb/modules/playintegrityfix-benos/module.prop"
+#define DEFAULT_PIF "/data/adb/modules/playintegrityfix-benos/pif.prop"
 #define CUSTOM_PIF "/data/adb/pif.prop"
 
 #define VENDING_PACKAGE "com.android.vending"
