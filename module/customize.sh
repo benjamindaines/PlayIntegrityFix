@@ -40,6 +40,7 @@ check_zygisk() {
 
 # Module requires Zygisk to work
 check_zygisk
+chmod +x /data/adb/modules/playintegrityfix-benos/bin/pifcrypt
 
 # safetynet-fix module is obsolete and it's incompatible with PIF
 SNFix="/data/adb/modules/safetynet-fix"

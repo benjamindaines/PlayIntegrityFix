@@ -1,2 +1,4 @@
 * text=auto
 *.jpg binary
+*.sh text eol=lf
+*.prop text eol=lf

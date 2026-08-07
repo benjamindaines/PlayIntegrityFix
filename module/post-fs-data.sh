@@ -1,6 +1,14 @@
 MODPATH="${0%/*}"
 . "$MODPATH"/common_func.sh
 
+chmod +x /data/adb/modules/playintegrityfix-benos/bin/pifcrypt
+
+if { [ ! -s /data/adb/pif.prop ] || ! grep -q '^FINGERPRINT=..*' /data/adb/pif.prop; } \
+   && [ -x "$MODPATH/bin/pifcrypt" ] && [ -f "$MODPATH/pif.prop.enc" ]; then
+    "$MODPATH/bin/pifcrypt" decrypt --moddir "$MODPATH" \
+        "$MODPATH/pif.prop.enc" /data/adb/pif.prop 2>/dev/null || true
+fi
+
 # Remove Play Services and Play Store from Magisk DenyList when set to Enforce in normal mode
 if magisk --denylist status; then
     magisk --denylist rm com.google.android.gms

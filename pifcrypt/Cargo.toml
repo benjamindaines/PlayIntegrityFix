@@ -1,0 +1,21 @@
+[package]
+name = "pifcrypt"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "pifcrypt"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10.3"
+sha2 = "0.10.8"
+getrandom = "0.2"
+hex = "0.4"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

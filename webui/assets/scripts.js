@@ -92,7 +92,12 @@ function applyButtonEventListeners() {
     viewBtn.onclick = async () => {
         const result = await exec(`cat /data/adb/pif.prop || cat ${moddir}/pif.prop`);
         if (result.errno === 0) {
-            const lines = result.stdout.split('\n').filter(line => line.trim() !== '');
+            // FINGERPRINT value is redacted at the display layer; the raw property
+            // remains readable at /data/adb/pif.prop via root filesystem access.
+            const lines = result.stdout
+                .split('\n')
+                .filter(line => line.trim() !== '')
+                .map(line => line.replace(/^(\s*FINGERPRINT\s*=).*$/i, '$1<hidden>'));
             lines.forEach(line => appendToOutput(line));
             appendToOutput("");
         } else {

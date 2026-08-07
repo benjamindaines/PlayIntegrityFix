@@ -23,6 +23,8 @@ until [ "$(getprop sys.boot_completed)" = "1" ]; do
     sleep 1
 done
 
+#sh "$MODDIR/autopif.sh"
+
 # SafetyNet/Play Integrity + OEM
 # avoid bootloop on some Xiaomi devices
 resetprop_if_diff ro.secureboot.lockstate locked
@@ -41,4 +43,14 @@ resetprop_if_diff vendor.boot.vbmeta.device_state locked
 # Other
 resetprop_if_diff sys.oem_unlock_allowed 0
 
-sh "$MODDIR/autopif.sh"
+
+# autopif functions as an on-demand fallback rather than a per-boot operation.
+# Automatic execution occurs only when no provisioned config is present; an
+# existing /data/adb/pif.prop carrying a populated FINGERPRINT is left intact.
+# On-demand regeneration remains available through the WebUI Fetch action.
+if [ ! -s /data/adb/pif.prop ] || ! grep -q '^FINGERPRINT=..*' /data/adb/pif.prop; then
+	sh "$MODDIR/autopif.sh"
+fi
+
+
+#sh "$MODDIR/autopif.sh"
