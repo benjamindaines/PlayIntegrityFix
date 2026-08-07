@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <android/log.h>
+#include <array>
 #include <jni.h>
 #include <string>
 #include <string_view>
@@ -25,12 +26,25 @@
 #define CUSTOM_PIF "/data/adb/pif.prop"
 
 #define VENDING_PACKAGE "com.android.vending"
-#define DROIDGUARD_PACKAGE "com.google.android.gms.unstable"
 
 namespace {
 
 constexpr uint8_t COMMAND_LOAD_PAYLOAD = 1;
 constexpr int PAYLOAD_TIMEOUT_MS = 5000;
+
+// Package-directory pre-filter. The companion connection and profile lookup
+// occur only for processes whose app_data_dir belongs to one of these
+// packages; every other specialized process short-circuits with no IPC. Any
+// process within these packages is routable by exact name from pif.prop. To
+// make a process in a different package routable, add its data-dir suffix
+// here. (Note: system/vendor IMS daemons such as com.mediatek.ims read native
+// build properties rather than the Java Build fields set here, and are not
+// generally zygote-forked app processes, so routing them has no effect.)
+constexpr std::array<std::string_view, 3> ALLOWED_PACKAGE_DIRS = {
+        "/com.google.android.gms",
+        "/com.android.vending",
+        "/com.google.android.apps.messaging",
+};
 
 JNIEnv *gEnv = nullptr;
 pif::Config gConfig;
@@ -146,6 +160,20 @@ bool readVector(int fd, std::vector<uint8_t> &buffer) {
     return size == 0 || readExact(fd, buffer.data(), size);
 }
 
+bool writeString(int fd, const std::string &value) {
+    const std::vector<uint8_t> bytes(value.begin(), value.end());
+    return writeVector(fd, bytes);
+}
+
+bool readString(int fd, std::string &value) {
+    std::vector<uint8_t> bytes;
+    if (!readVector(fd, bytes)) {
+        return false;
+    }
+    value.assign(bytes.begin(), bytes.end());
+    return true;
+}
+
 uint32_t crc32(const uint8_t *data, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < len; ++i) {
@@ -156,73 +184,6 @@ uint32_t crc32(const uint8_t *data, size_t len) {
     }
     return ~crc;
 }
-
-//bool verifyModule(const char *path, const char *expectedHex) {
-//    const bool update = access("/data/adb/modules/playintegrityfix/update", F_OK) == 0;
-//    if (update) {
-//        return true;
-//    }
-//
-//    const int fd = open(path, O_RDWR);
-//    if (fd < 0) {
-//        return false;
-//    }
-//
-//    std::vector<uint8_t> buf;
-//    uint8_t tmp[512];
-//    ssize_t n = 0;
-//    while ((n = read(fd, tmp, sizeof(tmp))) > 0) {
-//        buf.insert(buf.end(), tmp, tmp + n);
-//    }
-//    if (buf.empty()) {
-//        close(fd);
-//        return false;
-//    }
-//
-//    const uint32_t crc = crc32(buf.data(), buf.size());
-//    uint32_t expectedCrc = 0;
-//    sscanf(expectedHex, "%x", &expectedCrc);
-//
-//    if (crc == expectedCrc) {
-//        close(fd);
-//        return true;
-//    }
-//
-//    LOGD("[COMPANION] module tampered!");
-//
-//    lseek(fd, 0, SEEK_SET);
-//    std::vector<std::string> lines;
-//    const std::string fileStr(buf.begin(), buf.end());
-//    size_t pos = 0;
-//    while (pos < fileStr.size()) {
-//        const size_t next = fileStr.find('\n', pos);
-//        std::string line = fileStr.substr(pos, next - pos + 1);
-//        if (line.rfind("description=", 0) == 0) {
-//            line = "description=❌ This module has been tampered, please install from official source.\n";
-//        }
-//        lines.push_back(line);
-//        if (next == std::string::npos) {
-//            break;
-//        }
-//        pos = next + 1;
-//    }
-//
-//    if (ftruncate(fd, 0) != 0) {
-//        close(fd);
-//        return false;
-//    }
-//
-//    lseek(fd, 0, SEEK_SET);
-//    for (const auto &line : lines) {
-//        if (write(fd, line.c_str(), line.size()) != static_cast<ssize_t>(line.size())) {
-//            close(fd);
-//            return false;
-//        }
-//    }
-//
-//    close(fd);
-//    return false;
-//}
 
 std::string propMapToJson() {
     std::string json = "{";
@@ -427,7 +388,10 @@ void injectDex() {
     gEnv->DeleteLocalRef(classLoaderClass);
 }
 
-bool requestPayload(int fd) {
+// Requests the profile routed to processName. Returns false when the process
+// is unrouted (companion reports no match) or on any transport error; the
+// caller then unloads the module from this process.
+bool requestPayload(int fd, const std::string &processName) {
     if (fd < 0) {
         return false;
     }
@@ -435,6 +399,7 @@ bool requestPayload(int fd) {
     applySocketTimeout(fd);
 
     bool ok = writeExact(fd, &COMMAND_LOAD_PAYLOAD, sizeof(COMMAND_LOAD_PAYLOAD));
+    ok = ok && writeString(fd, processName);
     bool companionOk = false;
     ok = ok && readExact(fd, &companionOk, sizeof(companionOk));
     if (!ok || !companionOk) {
@@ -461,29 +426,38 @@ bool requestPayload(int fd) {
 void companion(int fd) {
     applySocketTimeout(fd);
 
-//    bool ok = verifyModule(MODULE_PROP, MODULE_PROP_CHECKSUM_HEX);
     bool ok = true;
     uint8_t command = 0;
+    std::string processName;
     ok = ok && readExact(fd, &command, sizeof(command));
     ok = ok && command == COMMAND_LOAD_PAYLOAD;
+    ok = ok && readString(fd, processName);
 
     std::vector<uint8_t> propBytes;
     std::vector<uint8_t> dexBytes;
     pif::Config config;
+    bool routed = false;
 
     if (ok) {
         ok = loadPropBytes(propBytes);
     }
     if (ok) {
         const std::string_view propView(reinterpret_cast<const char *>(propBytes.data()), propBytes.size());
-        config = pif::parseConfig(propView);
+        const pif::ConfigBundle bundle = pif::parseBundle(propView);
+        routed = bundle.routes.find(processName) != bundle.routes.end();
+        if (routed) {
+            config = pif::selectConfig(bundle, processName);
+        }
     }
-    if (ok && config.needsDex()) {
+    if (ok && routed && config.needsDex()) {
         ok = readFileBytes(DEX_PATH, dexBytes);
     }
 
-    writeExact(fd, &ok, sizeof(ok));
-    if (!ok) {
+    // A false result (transport failure OR no route for this process) tells the
+    // module to unload from the process without applying anything.
+    const bool result = ok && routed;
+    writeExact(fd, &result, sizeof(result));
+    if (!result) {
         return;
     }
 
@@ -510,8 +484,8 @@ public:
 
     void preAppSpecialize(AppSpecializeArgs *args) override {
         payloadLoaded = false;
-        isGmsUnstable = false;
         isVending = false;
+        processName.clear();
         gConfig = {};
         gDexBytes.clear();
 
@@ -541,26 +515,30 @@ public:
         }
 
         const std::string_view appDir(dir);
-        const bool isGms = appDir.ends_with("/com.google.android.gms") || appDir.ends_with("/com.android.vending");
-        if (!isGms) {
+        bool inScope = false;
+        for (const auto suffix : ALLOWED_PACKAGE_DIRS) {
+            if (appDir.ends_with(suffix)) {
+                inScope = true;
+                break;
+            }
+        }
+        if (!inScope) {
+            api->setOption(DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+
+        processName = name;
+        isVending = processName == VENDING_PACKAGE;
+
+        // The companion decides whether this exact process is routed; unrouted
+        // processes yield payloadLoaded == false and are unloaded below.
+        payloadLoaded = requestPayload(api->connectCompanion(), processName);
+        if (!payloadLoaded) {
             api->setOption(DLCLOSE_MODULE_LIBRARY);
             return;
         }
 
         api->setOption(FORCE_DENYLIST_UNMOUNT);
-
-        const std::string_view niceName(name);
-        isGmsUnstable = niceName == DROIDGUARD_PACKAGE;
-        isVending = niceName == VENDING_PACKAGE;
-        if (!isGmsUnstable && !isVending) {
-            api->setOption(DLCLOSE_MODULE_LIBRARY);
-            return;
-        }
-
-        payloadLoaded = requestPayload(api->connectCompanion());
-        if (!payloadLoaded) {
-            api->setOption(DLCLOSE_MODULE_LIBRARY);
-        }
     }
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
@@ -570,26 +548,32 @@ public:
 
         gEnv = env;
 
-        if (isGmsUnstable) {
-            if (gConfig.spoofBuild) {
-                updateBuildFields();
-            }
-
-            if (gConfig.needsDex()) {
-                injectDex();
-            } else {
-                LOGD("[INJECT] Dex payload skipped because spoofProvider and spoofSignature are false");
-            }
-
-            if (gConfig.spoofProps) {
-                doHook();
-            }
-        } else if (isVending) {
+        if (isVending) {
+            // Play Store certification path retains the SDK-clamp option.
             if (gConfig.spoofVendingBuild) {
                 updateBuildFields();
             } else if (gConfig.spoofVendingSdk) {
                 doSpoofVending();
             }
+            return;
+        }
+
+        // Standard build-field path for every other routed process
+        // (DroidGuard integrity, Messages RCS provisioning, etc.). Dex/provider
+        // injection occurs only when the routed profile requests it, which the
+        // RCS profile does not.
+        if (gConfig.spoofBuild) {
+            updateBuildFields();
+        }
+
+        if (gConfig.needsDex()) {
+            injectDex();
+        } else {
+            LOGD("[INJECT] Dex payload skipped because spoofProvider and spoofSignature are false");
+        }
+
+        if (gConfig.spoofProps) {
+            doHook();
         }
     }
 
@@ -601,8 +585,8 @@ private:
     Api *api = nullptr;
     JNIEnv *env = nullptr;
     bool payloadLoaded = false;
-    bool isGmsUnstable = false;
     bool isVending = false;
+    std::string processName;
 };
 
 REGISTER_ZYGISK_MODULE(PlayIntegrityFix)

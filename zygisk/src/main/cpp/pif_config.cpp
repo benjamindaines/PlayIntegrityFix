@@ -110,6 +110,97 @@ namespace pif {
             }
         }
 
+        // Finalize one profile's raw key/value map into a Config. Extraction
+        // order and the double fingerprint expansion mirror the original
+        // single-profile parseConfig so that per-profile field semantics are
+        // identical to the pre-routing implementation.
+        Config buildConfigFromRaw(std::unordered_map<std::string, std::string> rawMap) {
+            Config config;
+
+            if (const auto it = rawMap.find("spoofVendingSdk"); it != rawMap.end()) {
+                config.spoofVendingSdk = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("spoofVendingBuild"); it != rawMap.end()) {
+                config.spoofVendingBuild = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("DEVICE_INITIAL_SDK_INT"); it != rawMap.end()) {
+                config.deviceInitialSdkInt = it->second;
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("spoofBuild"); it != rawMap.end()) {
+                config.spoofBuild = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("spoofProvider"); it != rawMap.end()) {
+                config.spoofProvider = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("spoofProps"); it != rawMap.end()) {
+                config.spoofProps = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("spoofSignature"); it != rawMap.end()) {
+                config.spoofSignature = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("DEBUG"); it != rawMap.end()) {
+                config.debug = parseBool(it->second);
+                rawMap.erase(it);
+            }
+            if (const auto it = rawMap.find("FINGERPRINT"); it != rawMap.end()) {
+                expandFingerprint(config, it->second);
+            }
+            if (const auto it = rawMap.find("SECURITY_PATCH"); it != rawMap.end()) {
+                config.securityPatch = it->second;
+            }
+            if (const auto it = rawMap.find("ID"); it != rawMap.end()) {
+                config.buildId = it->second;
+            } else if (const auto it = config.propMap.find("ID"); it != config.propMap.end()) {
+                config.buildId = it->second;
+            }
+
+            config.propMap = std::move(rawMap);
+            if (const auto it = config.propMap.find("FINGERPRINT"); it != config.propMap.end()) {
+                expandFingerprint(config, it->second);
+            }
+            if (config.buildId.empty()) {
+                if (const auto it = config.propMap.find("ID"); it != config.propMap.end()) {
+                    config.buildId = it->second;
+                }
+            }
+
+            return config;
+        }
+
+        // Recognize a section header of the form "[profile <name>]", "[<name>]",
+        // or "[route]". Returns true on a header line and reports the section
+        // kind through the out-params. isRoute is set for a dedicated [route]
+        // block whose key/value lines populate the routing table directly.
+        bool parseHeader(const std::string &trimmedLine, std::string &profileOut, bool &isRoute) {
+            if (trimmedLine.size() < 2 || trimmedLine.front() != '[' || trimmedLine.back() != ']') {
+                return false;
+            }
+
+            std::string inner = trim(std::string_view(trimmedLine).substr(1, trimmedLine.size() - 2));
+            if (inner == "route") {
+                isRoute = true;
+                profileOut.clear();
+                return true;
+            }
+
+            isRoute = false;
+            constexpr std::string_view prefix = "profile";
+            if (inner.rfind(prefix, 0) == 0 && inner.size() > prefix.size() &&
+                (inner[prefix.size()] == ' ' || inner[prefix.size()] == '\t')) {
+                inner = trim(std::string_view(inner).substr(prefix.size()));
+            }
+
+            profileOut = inner.empty() ? "default" : inner;
+            return true;
+        }
+
         bool writeVector(int fd, const std::vector<uint8_t> &buffer) {
             const uint32_t size = static_cast<uint32_t>(buffer.size());
             if (!writeExact(fd, &size, sizeof(size))) {
@@ -144,9 +235,15 @@ namespace pif {
         }
     }
 
-    Config parseConfig(std::string_view content) {
-        Config config;
-        std::unordered_map<std::string, std::string> rawMap;
+    ConfigBundle parseBundle(std::string_view content) {
+        // Per-profile raw accumulation preserves insertion independence between
+        // profiles; finalization runs once per profile after the full pass.
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> rawProfiles;
+        ConfigBundle bundle;
+
+        std::string currentProfile = "default";
+        bool routeSection = false;
+        rawProfiles[currentProfile];  // ensure default exists even when empty
 
         size_t lineStart = 0;
         while (lineStart <= content.size()) {
@@ -162,9 +259,27 @@ namespace pif {
 
             const auto trimmed = trim(line);
             if (!trimmed.empty()) {
-                const auto eq = trimmed.find('=');
-                if (eq != std::string::npos) {
-                    rawMap.emplace(trim(trimmed.substr(0, eq)), trim(trimmed.substr(eq + 1)));
+                std::string headerProfile;
+                bool headerIsRoute = false;
+                if (parseHeader(trimmed, headerProfile, headerIsRoute)) {
+                    routeSection = headerIsRoute;
+                    if (!routeSection) {
+                        currentProfile = headerProfile;
+                        rawProfiles[currentProfile];  // materialize section
+                    }
+                } else if (const auto eq = trimmed.find('='); eq != std::string::npos) {
+                    const std::string key = trim(trimmed.substr(0, eq));
+                    const std::string value = trim(trimmed.substr(eq + 1));
+
+                    if (routeSection) {
+                        bundle.routes[key] = value;
+                    } else if (key.rfind("route.", 0) == 0) {
+                        // Global routing key usable from any section, e.g.
+                        // route.gms=integrity
+                        bundle.routes[key.substr(6)] = value;
+                    } else {
+                        rawProfiles[currentProfile][key] = value;
+                    }
                 }
             }
 
@@ -174,61 +289,33 @@ namespace pif {
             lineStart = lineEnd + 1;
         }
 
-        if (const auto it = rawMap.find("spoofVendingSdk"); it != rawMap.end()) {
-            config.spoofVendingSdk = parseBool(it->second);
-            rawMap.erase(it);
+        for (auto &[name, raw] : rawProfiles) {
+            bundle.profiles.emplace(name, buildConfigFromRaw(std::move(raw)));
         }
-        if (const auto it = rawMap.find("spoofVendingBuild"); it != rawMap.end()) {
-            config.spoofVendingBuild = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("DEVICE_INITIAL_SDK_INT"); it != rawMap.end()) {
-            config.deviceInitialSdkInt = it->second;
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("spoofBuild"); it != rawMap.end()) {
-            config.spoofBuild = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("spoofProvider"); it != rawMap.end()) {
-            config.spoofProvider = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("spoofProps"); it != rawMap.end()) {
-            config.spoofProps = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("spoofSignature"); it != rawMap.end()) {
-            config.spoofSignature = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("DEBUG"); it != rawMap.end()) {
-            config.debug = parseBool(it->second);
-            rawMap.erase(it);
-        }
-        if (const auto it = rawMap.find("FINGERPRINT"); it != rawMap.end()) {
-            expandFingerprint(config, it->second);
-        }
-        if (const auto it = rawMap.find("SECURITY_PATCH"); it != rawMap.end()) {
-            config.securityPatch = it->second;
-        }
-        if (const auto it = rawMap.find("ID"); it != rawMap.end()) {
-            config.buildId = it->second;
-        } else if (const auto it = config.propMap.find("ID"); it != config.propMap.end()) {
-            config.buildId = it->second;
+        if (bundle.profiles.find("default") == bundle.profiles.end()) {
+            bundle.profiles.emplace("default", Config{});
         }
 
-        config.propMap = std::move(rawMap);
-        if (const auto it = config.propMap.find("FINGERPRINT"); it != config.propMap.end()) {
-            expandFingerprint(config, it->second);
-        }
-        if (config.buildId.empty()) {
-            if (const auto it = config.propMap.find("ID"); it != config.propMap.end()) {
-                config.buildId = it->second;
-            }
+        return bundle;
+    }
+
+    Config selectConfig(const ConfigBundle &bundle, std::string_view target) {
+        std::string profileName = "default";
+        if (const auto route = bundle.routes.find(std::string(target)); route != bundle.routes.end()) {
+            profileName = route->second;
         }
 
-        return config;
+        if (const auto it = bundle.profiles.find(profileName); it != bundle.profiles.end()) {
+            return it->second;
+        }
+        if (const auto it = bundle.profiles.find("default"); it != bundle.profiles.end()) {
+            return it->second;
+        }
+        return Config{};
+    }
+
+    Config parseConfig(std::string_view content) {
+        return selectConfig(parseBundle(content), "default");
     }
 
     bool writeConfig(int fd, const Config &config) {
