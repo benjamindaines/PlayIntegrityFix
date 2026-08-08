@@ -1,0 +1,35 @@
+route.com.google.android.gms.unstable=rcs
+route.com.android.vending=integrity
+route.com.google.android.apps.messaging:rcs=rcs
+route.com.google.android.apps.messaging=rcs
+route.com.google.mediatek.ims=rcs
+route.com.google.android.ims=rcs
+
+# --- default: fallback for a routed process whose named profile is absent --
+DEBUG=true
+
+[profile rcs]
+FINGERPRINT=
+MANUFACTURER=
+MODEL=
+SECURITY_PATCH=
+spoofBuild=true
+spoofProps=true
+spoofProvider=false
+spoofSignature=false
+DEBUG=false
+
+[profile integrity]
+FINGERPRINT=
+MANUFACTURER=s
+MODEL=
+SECURITY_PATCH=
+DEVICE_INITIAL_SDK_INT=
+spoofBuild=true
+spoofProps=true
+spoofProvider=false
+spoofSignature=false
+spoofVendingBuild=true
+spoofVendingSdk=true
+DEBUG=false
+
