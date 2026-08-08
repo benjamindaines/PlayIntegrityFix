@@ -40,8 +40,10 @@ constexpr int PAYLOAD_TIMEOUT_MS = 5000;
 // here. (Note: system/vendor IMS daemons such as com.mediatek.ims read native
 // build properties rather than the Java Build fields set here, and are not
 // generally zygote-forked app processes, so routing them has no effect.)
-constexpr std::array<std::string_view, 3> ALLOWED_PACKAGE_DIRS = {
+constexpr std::array<std::string_view, 5> ALLOWED_PACKAGE_DIRS = {
         "/com.google.android.gms",
+        "/com.google.mediatek.ims",
+        "/com.google.android.ims",
         "/com.android.vending",
         "/com.google.android.apps.messaging",
 };

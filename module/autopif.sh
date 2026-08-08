@@ -1,5 +1,5 @@
 #!/bin/sh
-
+exit 0
 PATH=/data/adb/ap/bin:/data/adb/ksu/bin:/data/adb/magisk:/data/data/com.termux/files/usr/bin:$PATH
 MODDIR=/data/adb/modules/playintegrityfix-benos
 version=$(grep "^version=" $MODDIR/module.prop | sed 's/version=//g')
