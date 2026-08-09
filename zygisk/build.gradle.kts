@@ -78,6 +78,15 @@ android {
 
                 cppFlags += "-std=c++26"
                 cppFlags += commonFlags
+
+                // Optional compile-time override of the device-side key-file
+                // path consumed by zygisk.cpp (PIF_KEYFILE_PATH). Supplied by
+                // build.sh as -PkeyfilePath=/absolute/device/path; when absent
+                // the source default (/product/etc/security/pif.key) applies.
+                // The value is stringized in C, so it must contain no spaces.
+                (project.findProperty("keyfilePath") as String?)?.let {
+                    cppFlags += "-DPIF_KEYFILE_PATH=$it"
+                }
             }
         }
     }

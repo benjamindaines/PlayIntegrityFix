@@ -13,6 +13,9 @@ local.properties
 *.zip
 .vscode
 checksum.h
-module/webroot
+module/bin
 webui/node_modules
 pif.prop
+action.sh
+out/*
+moudle_patches

@@ -1,12 +1,33 @@
 #!/bin/bash
-set -eu
-
+#set -eu
+ARGS=("$@")
+_i=0
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_blu=$'\033[34m'; c_rst=$'\033[0m'
 log()  { printf '%s[*]%s %s\n' "$c_blu" "$c_rst" "$*"; }
 ok()   { printf '%s[+]%s %s\n' "$c_grn" "$c_rst" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$c_ylw" "$c_rst" "$*" >&2; }
 die()  { printf '%s[x]%s %s\n' "$c_red" "$c_rst" "$*" >&2; exit 1; }
 
+debug() {
+    [[ " $* " == *"--debug"* ]] && { \
+        cp "$HERE/action.sh" "$STAGING/action.sh"
+        warn "DEBUG BUILD: Contains action.sh that prints the whole everything in plain text!!"
+        warn "Confirm this is what you want? (y/n)"
+        read -r _input && CONFIRM=${_input^^}
+        [[ $CONFIRM !=  "Y" ]] && ${ rm "$STAGING/action.sh"; die "Removing action.sh from the staging dir. Run build again.";  } 
+        }
+}
+
+while [ $_i -lt ${#ARGS[@]} ]; do
+	[[ ${ARGS[$_i]} == "--rom-keyfile" ]] && { \
+		_i=$((_i + 1))
+		ROM_KEYFILE="${ARGS[$_i]}"
+	}
+	_i=$((_i + 1))
+done && _i=0
+
+
+[[ " $* " == *" clean "* ]] && gradle clean && exit 0
 
 HERE="$(pwd)"
 STAGING="module"
@@ -15,12 +36,41 @@ HOST="pifcrypt/target/release/pifcrypt"
 LOCAL="module/bin/pifcrypt"
 ENC="$STAGING/pif.prop.enc"
 
+# Optional ROM-locked seal. When "--keyfile PATH" is supplied, PATH is folded
+# into the key derivation for every pifcrypt invocation below, binding the seal
+# to the byte content of that file. The same PATH content must be present on the
+# device at the compiled KEYFILE_PATH (see zygisk.cpp) for the companion to
+# reproduce the key. Absent this flag, the seal is manifest-only and portable
+# (installable as an ordinary KernelSU module). Only file content is bound, so
+# the build-time PATH and the on-device path may differ.
+KFARGS=()
+_args=("$@")
+_i=0
+while [ $_i -lt ${#_args[@]} ]; do
+    if [ "${_args[$_i]}" = "--keyfile" ]; then
+        _i=$((_i + 1))
+        [ $_i -lt ${#_args[@]} ] || die "--keyfile requires a value"
+        KEYFILE="${_args[$_i]}"
+        [ -s "$KEYFILE" ] || die "keyfile '$KEYFILE' missing or empty"
+        KFARGS=(--keyfile "$KEYFILE")
+        ok "ROM-locked seal: binding keyfile content ($(stat -c%s "$KEYFILE") bytes)"
+    elif [ "${_args[$_i]}" = "--keyfile-device-path" ]; then
+        _i=$((_i + 1))
+        [ $_i -lt ${#_args[@]} ] || die "--keyfile-device-path requires a value"
+        KEYFILE_DEVICE_PATH="${_args[$_i]}"
+        case "$KEYFILE_DEVICE_PATH" in *[[:space:]]*) die "--keyfile-device-path must not contain spaces";; esac
+    fi
+    _i=$((_i + 1))
+done
+
+sed -i 's|KEYFILE_PATH ""|KEYFILE_PATH "'$ROM_KEYFILE'"|g' zygisk/src/main/cpp/zygisk.cpp
+ok "device key-file path -> $ROM_KEYFILE "
+
 #---------------------------------------------------------------------------------------------------------------------
 #                                                                                                                     
 #	Check for the things that need to be built, and build them if need be.                                               
 #---------------------------------------------------------------------------------------------------------------------
 
-[[ " $* " == *" clean "* ]] && gradle clean
 
 
 while true; do
@@ -75,13 +125,13 @@ rm -f "$STAGING/pif.prop"
 #---------------------------------------------------------------------------------------------------------------------
 
 
-ok "seal_pif: build-time key = $("$HOST" derive-key --moddir "$STAGING")"
-"$HOST" encrypt --moddir "$STAGING" "$SEED" "$ENC" || die "::encryption.OOPS"
+ok "seal_pif: build-time key = $("$HOST" derive-key --moddir "$STAGING" "${KFARGS[@]+"${KFARGS[@]}"}")"
+"$HOST" encrypt --moddir "$STAGING" "${KFARGS[@]+"${KFARGS[@]}"}" "$SEED" "$ENC" || die "::encryption.OOPS"
 ok "seal_pif: sealed $(stat -c%s "$ENC") bytes -> $ENC"
 
 
 V="$(mktemp)"
-if ! "$HOST" decrypt --moddir "$STAGING" "$ENC" "$V" 2>/dev/null; then
+if ! "$HOST" decrypt --moddir "$STAGING" "${KFARGS[@]+"${KFARGS[@]}"}" "$ENC" "$V" 2>/dev/null; then
     rm -f "$V"
     die "seal_pif: FAIL round-trip did not authenticate; seal is stale vs staging" >&2
     exit 1
@@ -115,12 +165,13 @@ grep -q '^id=' "$STAGING/module.prop" || die "module.prop id unparseable (encodi
 #	Gradle handles the final build & pack                                                                         
 #                                                                                                                     
 #---------------------------------------------------------------------------------------------------------------------
-
+debug $*
 log "Packing...."
 ./gradlew assembleRelease || die "::build.OOPS"
-
 printf "\n"
 
+[[ -f "$STAGING/action.sh" ]] && rm "$STAGING/action.sh" && log "action.sh stashed away"
+sed -i 's|KEYFILE_PATH "'$ROM_KEYFILE'"|KEYFILE_PATH ""|g' zygisk/src/main/cpp/zygisk.cpp
 ok "All set, ready In Through the Out Door 🎸"
 
 

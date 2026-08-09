@@ -1,5 +1,5 @@
 #!/bin/sh
-
+exit 0
 # Tricky Store Security Patch Util
 
 MODDIR="/data/adb/modules/playintegrityfix-benos"

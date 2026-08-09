@@ -42,15 +42,3 @@ resetprop_if_diff vendor.boot.vbmeta.device_state locked
 
 # Other
 resetprop_if_diff sys.oem_unlock_allowed 0
-
-
-# autopif functions as an on-demand fallback rather than a per-boot operation.
-# Automatic execution occurs only when no provisioned config is present; an
-# existing /data/adb/pif.prop carrying a populated FINGERPRINT is left intact.
-# On-demand regeneration remains available through the WebUI Fetch action.
-#if [ ! -s /data/adb/pif.prop ] || ! grep -q '^FINGERPRINT=..*' /data/adb/pif.prop; th0en
-#	sh "$MODDIR/autopif.sh"
-#fi
-
-
-#sh "$MODDIR/autopif.sh"

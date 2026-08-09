@@ -16,14 +16,20 @@
 #include <fcntl.h>
 #include <vector>
 #include <cstdio>
+#include <sys/wait.h>
+#include <mutex>
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "PIF", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "PIF", __VA_ARGS__)
 
-#define DEX_PATH "/data/adb/modules/playintegrityfix-benos/classes.dex"
-#define MODULE_PROP "/data/adb/modules/playintegrityfix-benos/module.prop"
-#define DEFAULT_PIF "/data/adb/modules/playintegrityfix-benos/pif.prop"
-#define CUSTOM_PIF "/data/adb/pif.prop"
+#define MODDIR       "/data/adb/modules/playintegrityfix-benos"
+#define DEX_PATH     MODDIR "/classes.dex"
+#define MODULE_PROP  MODDIR "/module.prop"
+#define ENC_PATH     MODDIR "/pif.prop.enc"
+#define PIFCRYPT_BIN MODDIR "/bin/pifcrypt"
+
+// Out-of-module key file that binds the seal to the partition carrying it.
+#define KEYFILE_PATH ""
 
 #define VENDING_PACKAGE "com.android.vending"
 
@@ -137,11 +143,85 @@ bool readFileBytes(const char *path, std::vector<uint8_t> &out) {
     return bytes == 0 && !out.empty();
 }
 
+bool runPifcryptDecrypt(std::vector<uint8_t> &out) {
+    out.clear();
+
+    // Key-file presence is resolved in the parent, before fork(), so that the
+    // child performs only async-signal-safe operations (dup2/close/execl)
+    // between fork and exec and touches no lock another thread may hold.
+    const bool haveKey = access(KEYFILE_PATH, R_OK) == 0;
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return false;
+    }
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+
+    if (pid == 0) {
+        // Child: redirect stdout to the pipe, then exec the decryptor. The key
+        // file is included in argv only when the running image carries it
+        // (resolved by the parent above).
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        if (haveKey) {
+            execl(PIFCRYPT_BIN, "pifcrypt", "decrypt",
+                  "--moddir", MODDIR, "--keyfile", KEYFILE_PATH,
+                  ENC_PATH, "-", static_cast<char *>(nullptr));
+        } else {
+            execl(PIFCRYPT_BIN, "pifcrypt", "decrypt",
+                  "--moddir", MODDIR,
+                  ENC_PATH, "-", static_cast<char *>(nullptr));
+        }
+        _exit(127);
+    }
+
+    // Parent: drain the read end to EOF, then reap and gate on exit status.
+    close(pipefd[1]);
+    std::array<uint8_t, 4096> buf{};
+    ssize_t n;
+    while ((n = TEMP_FAILURE_RETRY(read(pipefd[0], buf.data(), buf.size()))) > 0) {
+        out.insert(out.end(), buf.begin(), buf.begin() + n);
+    }
+    close(pipefd[0]);
+
+    int status = 0;
+    if (TEMP_FAILURE_RETRY(waitpid(pid, &status, 0)) < 0) {
+        out.clear();
+        return false;
+    }
+    const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0 && !out.empty();
+    if (!ok) {
+        out.clear();
+    }
+    return ok;
+}
+
 bool loadPropBytes(std::vector<uint8_t> &out) {
-    if (readFileBytes(CUSTOM_PIF, out)) {
+    static std::mutex mtx;
+    static std::vector<uint8_t> cached;
+    static bool cachedOk = false;
+
+    std::lock_guard<std::mutex> lock(mtx);
+    if (cachedOk) {
+        out = cached;
         return true;
     }
-    return readFileBytes(DEFAULT_PIF, out);
+    std::vector<uint8_t> fresh;
+    if (!runPifcryptDecrypt(fresh)) {
+        return false;
+    }
+    cached = std::move(fresh);
+    cachedOk = true;
+    out = cached;
+    return true;
 }
 
 bool writeVector(int fd, const std::vector<uint8_t> &buffer) {
@@ -391,8 +471,7 @@ void injectDex() {
 }
 
 // Requests the profile routed to processName. Returns false when the process
-// is unrouted (companion reports no match) or on any transport error; the
-// caller then unloads the module from this process.
+// is unrouted (companion reports no match) or on any transport error.
 bool requestPayload(int fd, const std::string &processName) {
     if (fd < 0) {
         return false;
@@ -455,8 +534,6 @@ void companion(int fd) {
         ok = readFileBytes(DEX_PATH, dexBytes);
     }
 
-    // A false result (transport failure OR no route for this process) tells the
-    // module to unload from the process without applying anything.
     const bool result = ok && routed;
     writeExact(fd, &result, sizeof(result));
     if (!result) {
@@ -532,8 +609,6 @@ public:
         processName = name;
         isVending = processName == VENDING_PACKAGE;
 
-        // The companion decides whether this exact process is routed; unrouted
-        // processes yield payloadLoaded == false and are unloaded below.
         payloadLoaded = requestPayload(api->connectCompanion(), processName);
         if (!payloadLoaded) {
             api->setOption(DLCLOSE_MODULE_LIBRARY);
@@ -560,10 +635,6 @@ public:
             return;
         }
 
-        // Standard build-field path for every other routed process
-        // (DroidGuard integrity, Messages RCS provisioning, etc.). Dex/provider
-        // injection occurs only when the routed profile requests it, which the
-        // RCS profile does not.
         if (gConfig.spoofBuild) {
             updateBuildFields();
         }

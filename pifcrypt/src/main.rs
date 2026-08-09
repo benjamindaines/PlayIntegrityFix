@@ -1,19 +1,33 @@
 // pifcrypt: integrity-bound sealing of the module configuration seed.
 //
 // The encryption key is derived at runtime from the byte content of a fixed,
-// ordered set of module files (the "manifest") plus this binary itself. The
-// key is never stored. Sealing occurs at build time; unsealing occurs on
-// device. Reproduction of the key requires the manifest inputs to be
-// byte-identical to their build-time state. Any modification alters the derived
-// key, and AES-256-GCM authentication then fails on unseal, yielding no output.
+// ordered set of module files (the "manifest") plus this binary itself, and
+// optionally from the byte content of an out-of-module key file. The key is
+// never stored. Sealing occurs at build time; unsealing occurs on device.
+// Reproduction of the key requires the manifest inputs (and, when used, the key
+// file content) to be byte-identical to their build-time state. Any
+// modification alters the derived key, and AES-256-GCM authentication then
+// fails on unseal, yielding no output.
 //
 // The construction is a key-derivation binding, not an integrity check: there
 // is no stored digest to compare and therefore no branch to bypass. Deriving
 // the correct key is only possible from unmodified inputs.
+//
+// Key-file binding (--keyfile): the file's byte content is folded into the key
+// under a fixed domain-separation label. Only the content is bound; the path is
+// not, so the same seal reproduces across a build-time staging path and a
+// divergent on-device absolute path (e.g. a file placed on the product
+// partition and read from /product at runtime) as long as the bytes match.
+// Presence of the argument is symmetric: a seal produced with --keyfile unseals
+// only with identical --keyfile content, and a seal produced without it unseals
+// only without it. This yields two build modes from one binary: manifest-only
+// (portable module) and manifest-plus-key-file (bound to the partition that
+// carries the key file).
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::process::exit;
 
 // Container header: 8-byte magic, 1-byte version, 12-byte GCM nonce, then
@@ -27,6 +41,10 @@ const HEADER_LEN: usize = 8 + 1 + NONCE_LEN;
 // Domain-separation label for the key-derivation transcript. A change to this
 // label changes every derived key.
 const KDF_LABEL: &[u8] = b"pifcrypt-key-v1\0";
+
+// Domain-separation label for the optional key-file segment. Distinct from
+// KDF_LABEL so a key-file digest can never be confused with a manifest entry.
+const KEYFILE_LABEL: &[u8] = b"pifcrypt-keyfile-v1\0";
 
 // Ordered manifest of files bound into the key, expressed relative to the
 // module directory. Selection criteria: each entry must be present and
@@ -58,8 +76,10 @@ fn die(msg: &str) -> ! {
 // Derives the 32-byte key by folding a length-prefixed transcript of each
 // manifest file's relative path and content digest into an outer SHA-256.
 // Length prefixes on both the path and the per-file digest remove concatenation
-// ambiguity between adjacent entries.
-fn derive_key(moddir: &str) -> [u8; 32] {
+// ambiguity between adjacent entries. When a key file is supplied, its content
+// digest is appended under KEYFILE_LABEL; the file path itself is not folded,
+// so build-time and on-device paths may differ without altering the key.
+fn derive_key(moddir: &str, keyfile: Option<&str>) -> [u8; 32] {
     let mut outer = Sha256::new();
     outer.update(KDF_LABEL);
     outer.update((MANIFEST.len() as u64).to_le_bytes());
@@ -75,22 +95,37 @@ fn derive_key(moddir: &str) -> [u8; 32] {
         outer.update((fh.len() as u64).to_le_bytes());
         outer.update(fh);
     }
+    if let Some(kf) = keyfile {
+        let bytes = match std::fs::read(kf) {
+            Ok(b) => b,
+            Err(e) => die(&format!("read keyfile {kf}: {e}")),
+        };
+        // A zero-length key file is rejected: it would contribute no entropy and
+        // silently degrade the binding to manifest-only strength.
+        if bytes.is_empty() {
+            die(&format!("keyfile {kf} is empty"));
+        }
+        let fh = Sha256::digest(&bytes);
+        outer.update(KEYFILE_LABEL);
+        outer.update((fh.len() as u64).to_le_bytes());
+        outer.update(fh);
+    }
     let out = outer.finalize();
     let mut key = [0u8; 32];
     key.copy_from_slice(&out);
     key
 }
 
-fn cipher_for(moddir: &str) -> Aes256Gcm {
-    let key = derive_key(moddir);
+fn cipher_for(moddir: &str, keyfile: Option<&str>) -> Aes256Gcm {
+    let key = derive_key(moddir, keyfile);
     Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))
 }
 
-fn cmd_encrypt(moddir: &str, infile: &str, outfile: &str) {
+fn cmd_encrypt(moddir: &str, keyfile: Option<&str>, infile: &str, outfile: &str) {
     let pt = std::fs::read(infile).unwrap_or_else(|e| die(&format!("read {infile}: {e}")));
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce).unwrap_or_else(|e| die(&format!("rng: {e}")));
-    let ct = cipher_for(moddir)
+    let ct = cipher_for(moddir, keyfile)
         .encrypt(Nonce::from_slice(&nonce), pt.as_ref())
         .unwrap_or_else(|_| die("encrypt failed"));
     let mut out = Vec::with_capacity(HEADER_LEN + ct.len());
@@ -98,10 +133,16 @@ fn cmd_encrypt(moddir: &str, infile: &str, outfile: &str) {
     out.push(VERSION);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
-    std::fs::write(outfile, out).unwrap_or_else(|e| die(&format!("write {outfile}: {e}")));
+    if outfile == "-" {
+        let mut so = std::io::stdout();
+        so.write_all(&out).unwrap_or_else(|e| die(&format!("write stdout: {e}")));
+        so.flush().unwrap_or_else(|e| die(&format!("flush stdout: {e}")));
+    } else {
+        std::fs::write(outfile, out).unwrap_or_else(|e| die(&format!("write {outfile}: {e}")));
+    }
 }
 
-fn cmd_decrypt(moddir: &str, infile: &str, outfile: &str) {
+fn cmd_decrypt(moddir: &str, keyfile: Option<&str>, infile: &str, outfile: &str) {
     let blob = std::fs::read(infile).unwrap_or_else(|e| die(&format!("read {infile}: {e}")));
     if blob.len() < HEADER_LEN + TAG_LEN || &blob[0..8] != MAGIC {
         die("malformed container");
@@ -113,28 +154,37 @@ fn cmd_decrypt(moddir: &str, infile: &str, outfile: &str) {
     let ct = &blob[HEADER_LEN..];
     // GCM verifies the authentication tag prior to returning plaintext; a
     // derived-key mismatch or ciphertext tamper produces an error and no bytes.
-    let pt = cipher_for(moddir)
+    let pt = cipher_for(moddir, keyfile)
         .decrypt(Nonce::from_slice(nonce), ct)
         .unwrap_or_else(|_| die("authentication failed"));
-    // Output is written only after successful authenticated decryption, via a
-    // temporary file and atomic rename, so a consumer never observes a partial
-    // or unauthenticated result.
-    let tmp = format!("{outfile}.tmp");
-    std::fs::write(&tmp, &pt).unwrap_or_else(|e| die(&format!("write {tmp}: {e}")));
-    std::fs::rename(&tmp, outfile).unwrap_or_else(|e| die(&format!("rename {tmp}: {e}")));
+    // Output "-" streams plaintext to stdout for an in-memory consumer (the
+    // zygisk companion pipe); no plaintext is written to persistent storage. A
+    // named target is written via temporary file and atomic rename, so a
+    // consumer never observes a partial or unauthenticated result.
+    if outfile == "-" {
+        let mut so = std::io::stdout();
+        so.write_all(&pt).unwrap_or_else(|e| die(&format!("write stdout: {e}")));
+        so.flush().unwrap_or_else(|e| die(&format!("flush stdout: {e}")));
+    } else {
+        let tmp = format!("{outfile}.tmp");
+        std::fs::write(&tmp, &pt).unwrap_or_else(|e| die(&format!("write {tmp}: {e}")));
+        std::fs::rename(&tmp, outfile).unwrap_or_else(|e| die(&format!("rename {tmp}: {e}")));
+    }
 }
 
-fn cmd_derive_key(moddir: &str) {
-    println!("{}", hex::encode(derive_key(moddir)));
+fn cmd_derive_key(moddir: &str, keyfile: Option<&str>) {
+    println!("{}", hex::encode(derive_key(moddir, keyfile)));
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // Usage:
-    //   pifcrypt encrypt    --moddir DIR IN OUT
-    //   pifcrypt decrypt    --moddir DIR IN OUT
-    //   pifcrypt derive-key --moddir DIR
+    //   pifcrypt encrypt    --moddir DIR [--keyfile PATH] IN OUT
+    //   pifcrypt decrypt    --moddir DIR [--keyfile PATH] IN OUT
+    //   pifcrypt derive-key --moddir DIR [--keyfile PATH]
+    // OUT may be "-" to stream to stdout.
     let mut moddir: Option<String> = None;
+    let mut keyfile: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut i = 2;
     while i < args.len() {
@@ -144,6 +194,12 @@ fn main() {
                 die("--moddir requires a value");
             }
             moddir = Some(args[i].clone());
+        } else if args[i] == "--keyfile" {
+            i += 1;
+            if i >= args.len() {
+                die("--keyfile requires a value");
+            }
+            keyfile = Some(args[i].clone());
         } else {
             positional.push(args[i].clone());
         }
@@ -151,20 +207,21 @@ fn main() {
     }
     let cmd = args.get(1).map(String::as_str).unwrap_or("");
     let moddir = moddir.unwrap_or_else(|| die("--moddir is required"));
+    let kf = keyfile.as_deref();
     match cmd {
         "encrypt" => {
             if positional.len() != 2 {
                 die("encrypt requires IN and OUT");
             }
-            cmd_encrypt(&moddir, &positional[0], &positional[1]);
+            cmd_encrypt(&moddir, kf, &positional[0], &positional[1]);
         }
         "decrypt" => {
             if positional.len() != 2 {
                 die("decrypt requires IN and OUT");
             }
-            cmd_decrypt(&moddir, &positional[0], &positional[1]);
+            cmd_decrypt(&moddir, kf, &positional[0], &positional[1]);
         }
-        "derive-key" => cmd_derive_key(&moddir),
-        _ => die("usage: pifcrypt <encrypt|decrypt|derive-key> --moddir DIR [IN OUT]"),
+        "derive-key" => cmd_derive_key(&moddir, kf),
+        _ => die("usage: pifcrypt <encrypt|decrypt|derive-key> --moddir DIR [--keyfile PATH] [IN OUT]"),
     }
 }
