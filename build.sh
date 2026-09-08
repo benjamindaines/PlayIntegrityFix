@@ -26,15 +26,37 @@ while [ $_i -lt ${#ARGS[@]} ]; do
 	_i=$((_i + 1))
 done && _i=0
 
+while [ $_i -lt ${#ARGS[@]} ]; do
+	[[ ${ARGS[$_i]} == "--pif" ]] && { \
+		_i=$((_i + 1))
+		SEED="${ARGS[$_i]}"
+		log "Using $SEED as seed file"
+		break 2
+	} || log "Using pre-set default from build script for seed file"
+	_i=$((_i + 1))
+done && _i=0
 
 [[ " $* " == *" clean "* ]] && gradle clean && exit 0
 
 HERE="$(pwd)"
 STAGING="module"
-SEED="/home/ben/Documents/pif.prop"
+SEED="${SEED:-/home/ben/Documents/pif2.prop}"
 HOST="pifcrypt/target/release/pifcrypt"
 LOCAL="module/bin/pifcrypt"
 ENC="$STAGING/pif.prop.enc"
+
+while true; do 
+	warn "View seed file? (y/n)"
+	read confirm
+	CONFIRM="${confirm^^}"
+	[[ $CONFIRM != "Y" ]] && break
+	#cat "$SEED"
+	while read line; do
+		printf "\t%s\n" "$line"
+	done < $SEED
+	echo
+	break
+done
 
 # Optional ROM-locked seal. When "--keyfile PATH" is supplied, PATH is folded
 # into the key derivation for every pifcrypt invocation below, binding the seal
@@ -172,7 +194,7 @@ printf "\n"
 
 [[ -f "$STAGING/action.sh" ]] && rm "$STAGING/action.sh" && log "action.sh stashed away"
 sed -i 's|KEYFILE_PATH "'$ROM_KEYFILE'"|KEYFILE_PATH ""|g' zygisk/src/main/cpp/zygisk.cpp
-ok "All set, ready In Through the Out Door 🎸"
+ok "All set, ready In Through the Out Dir 🎸"
 
 
 exit 0

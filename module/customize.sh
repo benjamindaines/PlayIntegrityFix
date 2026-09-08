@@ -41,13 +41,12 @@ check_zygisk() {
 # module requires zygisk to work
 check_zygisk
 
-# Clean up
-for pkg in com.google.android.gms com.android.vending; do
-	pm clean $"pkg" && sync; sleep 3
-done
-
-
-
+pm clear com.google.android.gms && sync
+sleep 3
+pm clear com.google.android.apps.walletnfcrel && sync
+sleep 3
+pm clear com.android.vending && sync 
+sleep 3 
 
 
 BARLOW="\
@@ -90,4 +89,12 @@ We will create a civilization of the Mind in Cyberspace. May it be more humane a
 Davos, Switzerland
 February 8, 1996"
 
-fmt -sw 60 <<<"$BARLOW"
+printf "%s" "$BARLOW" | fmt -w 60
+echo
+echo
+echo "Got about 45 seconds or so to sit here.... mights well enjoy the reading material provided ;)"
+
+
+sleep 45
+
+exit 0

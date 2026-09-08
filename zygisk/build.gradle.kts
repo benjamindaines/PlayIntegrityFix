@@ -87,6 +87,9 @@ android {
                 (project.findProperty("keyfilePath") as String?)?.let {
                     cppFlags += "-DPIF_KEYFILE_PATH=$it"
                 }
+		if (project.hasProperty("debbugLog")) {
+			cppFlags += "-DPIF_LOG"
+		}
             }
         }
     }

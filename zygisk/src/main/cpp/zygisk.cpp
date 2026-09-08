@@ -615,7 +615,16 @@ public:
             return;
         }
 
-        api->setOption(FORCE_DENYLIST_UNMOUNT);
+        // Skip FORCE_DENYLIST_UNMOUNT for persistent GMS process to preserve root mount visibility
+        // for operations like Wallet tap-to-pay and checkin that must run in the persistent service context.
+        // Persistent service processes are identified by `:` suffix in nice_name (e.g., "com.google.android.gms:persistent").
+        // Non-persistent routed processes (child/isolated instances) still get full unmount for PIF spoofing isolation.
+        bool isServiceProcess = processName.find(':') != std::string::npos;
+        bool isPersistentGms = isServiceProcess && processName == "com.google.android.gms:persistent";
+        
+        if (!isPersistentGms) {
+            api->setOption(FORCE_DENYLIST_UNMOUNT);
+        }
     }
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
